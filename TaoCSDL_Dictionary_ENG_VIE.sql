@@ -156,6 +156,27 @@ GO
 
 insert into PhatAm(ID_PhatAm, ID_W, Link_PhatAm) values ('PA008', 'W003', 'sdfa');
 
+--Không cho thêm trùng từ trong bảng User_Vocabulary
+IF OBJECT_ID ('ThemTrungTu_User_Vocabulary','TR') IS NOT NULL DROP TRIGGER ThemTrungTu_User_Vocabulary; 
+go
+CREATE TRIGGER ThemTrungTu_User_Vocabulary
+ON User_Vocabulary
+after insert, update
+AS
+BEGIN
+	if update(ID_Voca)
+	begin
+		DECLARE @ID_W char(10), @count int
+		SET @ID_W = (select ID_W from inserted)
+		set @count = (select COUNT(*) from User_Vocabulary where @ID_W = ID_W)
+		if(@count > 1)
+		begin
+			raiserror ('Trùng từ !', 16, 1);
+			rollback
+		end
+	end
+END
+GO
 
 --Xóa tài khoản sẽ xóa luôn thông tin đăng nhập của tài khoản đó
 IF OBJECT_ID ('XoaTaiKhoan','TR') IS NOT NULL DROP TRIGGER XoaTaiKhoan; 
@@ -858,7 +879,7 @@ GO
 insert into User_PhatAm(ThoiGianPhatAm, Users, ID_W, Link_UserPhatAm) values ('2016-8-9', 'U000000002', 'W000000001', 'gouis');
 
 --Phát sinh mã tự động cho bảng User_Vocabulary
-IF OBJECT_ID ('PhatSinhMaTuDong_User_PhatAm','TR') IS NOT NULL DROP TRIGGER PhatSinhMaTuDong_User_Vocabulary; 
+IF OBJECT_ID ('PhatSinhMaTuDong_User_Vocabulary','TR') IS NOT NULL DROP TRIGGER PhatSinhMaTuDong_User_Vocabulary; 
 go
 create trigger PhatSinhMaTuDong_User_Vocabulary
 on User_Vocabulary
@@ -905,13 +926,32 @@ BEGIN
 																											(Select Users from inserted),
 																											(Select ID_W from inserted))
 																				
-		print 'Insert Suscessfull ID_UserPhatAm: ' + @ID_User_PhatAm
+		print 'Insert Suscessfull ID_Voca: ' + @ID_ID_Voca
 END
 GO
 
-insert into User_Vocabulary(Voca, Mean_Voca, Date_Voca, Users, ID_W) values ('Paper', 'Giấy', 'W000000001', 'gouis');
+insert into User_Vocabulary(Voca, Mean_Voca, Date_Voca, Users, ID_W) values ('Paper', 'Giấy', '2016-8-1', 'u000000002', 'W000000001');
 --============================================= VIEW ========================================================
+--Bảng kiểm tra từ thành viên đã thêm từ học vào chưa
+if OBJECT_ID('KiemTraHocTu_User', 'V') is not null
+	drop view KiemTraHocTu_User
+go
+create view KiemTraHocTu_User as
+	select User_Vocabulary.ID_W as ID_W_VoCa,Dictionary.Word as Word_VoCa
+	from Dictionary,User_Vocabulary
+	where Dictionary.ID_W=User_Vocabulary.ID_W;
+go
 
+
+--Bảng kiểm tra từ thành viên đã thêm từ phát âm vào chưa
+if OBJECT_ID('BangThemTuPhatAm', 'V') is not null
+	drop view BangThemTuPhatAm
+go
+create view BangThemTuPhatAm as
+	select User_PhatAm.ID_W,Dictionary.Word
+	from Dictionary,User_PhatAm
+	where Dictionary.ID_W=User_PhatAm.ID_W;
+go
 
 --=========================================== PROCEDURE =====================================================
 --Thêm 1 từ vào usersPhatAm
@@ -932,10 +972,157 @@ end
 go
 
 
+--Thêm 1 từ vào usersVocabulary, tạo bảng kiểm tra từ trùng chưa nhưng gọi không được
+if OBJECT_ID('ThemUsersVocabulary', 'P') is not null
+	drop PROCEDURE ThemUsersVocabulary
+go
+create PROCEDURE ThemUsersVocabulary(@Word varchar(20),@User varchar(50), @ThoiGian datetime) 
+as 
+begin
+	declare @Mean nvarchar(50),@IDW char(10)
+	select  @Mean=Dictionary.Mean,@IDW=Dictionary.ID_W
+	from Dictionary,User_Vocabulary,TaiKhoan
+	where  Dictionary.ID_W=User_Vocabulary.ID_W 
+	and @Word=Dictionary.Word and @User=TaiKhoan.Users and TaiKhoan.Users=User_Vocabulary.Users 
+	
+	insert into User_Vocabulary(Voca,Mean_Voca,Date_Voca,Users,ID_W) values(@Word,@Mean,@ThoiGian,@User,@IDW)
+end;
 
+
+--Thêm 1 user vào thang trình độ
+if OBJECT_ID('ThemTrinhDoUser', 'P') is not null
+	drop procedure ThemTrinhDoUser
+go
+create PROCEDURE ThemTrinhDoUser(@User varchar(50),@TrinhDo nvarchar(30),@ThoiGian datetime)
+as
+begin
+	declare @userthang varchar(50),@usertaikhoan varchar(50)
+	select @userthang=ThangTrinhDo.Users,@usertaikhoan=TaiKhoan.Users
+	from ThangTrinhDo,TaiKhoan
+	if @userthang<>@User and @usertaikhoan=@User
+		begin
+			insert into ThangTrinhDo(ThoiGian,TrinhDo,Users) values (@ThoiGian,@TrinhDo,@User)
+		end
+end;
+
+--Cập nhật thang trình độ cho Thành viên
+if OBJECT_ID('UpdateTrinhDoUser', 'p') is not null
+	drop procedure UpdateTrinhDoUser
+go
+create PROCEDURE UpdateTrinhDoUser(@User varchar(50),@TrinhDo nvarchar(30),@ThoiGian datetime)
+as
+begin
+	declare @userthang varchar(50)
+	select @userthang=ThangTrinhDo.Users
+	from ThangTrinhDo
+	if @userthang=@User
+		begin
+			update ThangTrinhDo set ThoiGian=@ThoiGian,TrinhDo=@TrinhDo,Users=@User
+		end
+end;
+
+
+--Thêm tài khoản
+if OBJECT_ID('ThemUser', 'P') is not null
+	drop procedure ThemUser
+go
+create PROCEDURE ThemUser(@User varchar(50),@Pass varchar(50),@NgaySinh date,@SDT varchar(15),@Email varchar(50), @ChucVu bit)
+as
+begin
+	declare @usertaikhoan varchar(50)
+	select @usertaikhoan=TaiKhoan.Users
+	from TaiKhoan
+	if  @usertaikhoan<>@User
+		begin
+			insert into TaiKhoan values (@User,@Pass,@NgaySinh,@SDT,@Email, @ChucVu)
+		end
+end;
+
+--Cập nhật tài khoản
+if OBJECT_ID ('UpdateUser', 'P') is not null
+	drop procedure UpdateUser
+go
+create PROCEDURE UpdateUser(@User varchar(50),@Pass varchar(50),@NgaySinh date,@SDT varchar(15),@Email varchar(50))
+as
+begin
+	declare @usertaikhoan varchar(50)
+	select @usertaikhoan=TaiKhoan.Users
+	from TaiKhoan
+	if @usertaikhoan=@User
+		begin
+			update TaiKhoan set Users=@User,Passwd=@Pass,NgaySinh=@NgaySinh,SDT=@SDT,Email=@Email
+		end
+end;
+
+
+--Thêm từ vựng
+if OBJECT_ID ('ThemDictionary', 'P') is not null
+	drop procedure ThemDictionary
+go
+create PROCEDURE ThemDictionary(@Word varchar(20),@Pronun char(20),@Mean nvarchar(50),@Link varchar(50))
+as
+begin
+	insert into Dictionary(Word,Pronun,Mean,Link) values (@Word,@Pronun,@Mean,@Link)
+end;
+
+
+--Cập nhật từ vựng
+if OBJECT_ID ('UpdateDictionary', 'P') is not null
+	drop procedure UpdateDictionary
+go
+create PROCEDURE UpdateDictionary(@Word varchar(20),@Pronun char(20),@Mean nvarchar(50),@Link varchar(50))
+as
+begin
+	declare @Worddic varchar(50)
+	select @Worddic=Dictionary.Word from Dictionary
+	if  @Worddic=@Word
+		begin
+			update Dictionary set Word=@Word,Pronun=@Pronun,Mean=@Mean,Link=@Link
+		end
+end;
+
+
+--Thêm ngữ pháp
+if OBJECT_ID ('ThemGrammar', 'P') is not null
+	drop procedure ThemGrammar
+go
+create PROCEDURE ThemGrammar(@Name varchar(30), @Grammar nvarchar(500))
+as
+begin
+	declare @Namegr varchar(50)
+	select @Namegr=Grammar.Name_Gr
+	from Grammar
+	if  @Namegr<>@Name
+		begin
+			insert into Grammar(Name_Gr,Grammar) values (@Name,@Grammar)
+		end
+end;
+
+
+--Cập nhật ngữ pháp
+if OBJECT_ID ('UpdateGrammar', 'P') is not null
+	drop procedure UpdateGrammar
+go
+create PROCEDURE UpdateGrammar(@Name varchar(30), @Grammar nvarchar(500))
+as
+begin
+	declare @Namegr varchar(50)
+	select @Namegr=Grammar.Name_Gr
+	from Grammar
+	if  @Namegr=@Name
+		begin
+			update Grammar set Name_Gr=@Name,Grammar=@Grammar
+		end
+end;
 
 --============================================ FUNCTION =====================================================
 --Hàm trả về bảng các phản hồi chưa đọc
+if OBJECT_ID('fPhanHoiChuaDoc', 'if') is not null
+	drop function fPhanHoiChuaDoc
+go
+
+
+--=========================================== FUNCTION =====================================================
 if OBJECT_ID('fPhanHoiChuaDoc', 'if') is not null
 	drop function fPhanHoiChuaDoc
 go
@@ -986,16 +1173,6 @@ return
 	where @Word=Dictionary.Word and Dictionary.ID_W=User_PhatAm.ID_W and @User=User_PhatAm.Users
 go
 
---Bảng kiểm tra từ thành viên đã thêm từ phát âm vào chưa
-if OBJECT_ID('BangThemTuPhatAm', 'if') is not null
-	drop function BangThemTuPhatAm
-go
-create view BangThemTuPhatAm as
-	select User_PhatAm.ID_W,Dictionary.Word
-	from Dictionary,User_PhatAm
-	where Dictionary.ID_W=User_PhatAm.ID_W;
-go
-
 
 --Thành viên học lại từ đã lưu lúc trước
 if OBJECT_ID('LuyenTu', 'if') is not null
@@ -1009,114 +1186,12 @@ return
 	from Dictionary,User_Vocabulary
 	where @Word=Dictionary.Word and Dictionary.ID_W=User_Vocabulary.ID_W and @User=User_Vocabulary.Users
 go
---Bảng kiểm tra từ thành viên đã thêm từ học vào chưa
-create view KiemTraHocTu_User as
-	select User_Vocabulary.ID_W as ID_W_VoCa,Dictionary.Word as Word_VoCa
-	from Dictionary,User_Vocabulary
-	where Dictionary.ID_W=User_Vocabulary.ID_W;
---Thêm 1 từ vào usersVocabulary, tạo bảng kiểm tra từ trùng chưa nhưng gọi không được
-create PROCEDURE ThemUsersVocabulary(@Word varchar(20),@User varchar(50), @ThoiGian datetime) 
-as 
-begin
-	declare @Mean nvarchar(50),@IDW char(10)
-	select  @Mean=Dictionary.Mean,@IDW=Dictionary.ID_W
-	from Dictionary,User_Vocabulary,TaiKhoan
-	where  Dictionary.ID_W=User_Vocabulary.ID_W 
-	and @Word=Dictionary.Word and @User=TaiKhoan.Users and TaiKhoan.Users=User_Vocabulary.Users 
-	
-	insert into User_Vocabulary(Voca,Mean_Voca,Date_Voca,Users,ID_W) values(@Word,@Mean,@ThoiGian,@User,@IDW)
-end;
---Thêm 1 user vào thang trình độ
-create PROCEDURE ThemTrinhDoUser(@User varchar(50),@TrinhDo nvarchar(30),@ThoiGian datetime)
-as
-begin
-	declare @userthang varchar(50),@usertaikhoan varchar(50)
-	select @userthang=ThangTrinhDo.Users,@usertaikhoan=TaiKhoan.Users
-	from ThangTrinhDo,TaiKhoan
-	if @userthang<>@User and @usertaikhoan=@User
-		begin
-			insert into ThangTrinhDo(ThoiGian,TrinhDo,Users) values (@ThoiGian,@TrinhDo,@User)
-		end
-end;
---Cập nhật thang trình độ cho Thành viên
-create PROCEDURE UpdateTrinhDoUser(@User varchar(50),@TrinhDo nvarchar(30),@ThoiGian datetime)
-as
-begin
-	declare @userthang varchar(50)
-	select @userthang=ThangTrinhDo.Users
-	from ThangTrinhDo
-	if @userthang=@User
-		begin
-			update ThangTrinhDo set ThoiGian=@ThoiGian,TrinhDo=@TrinhDo,Users=@User
-		end
-end;
---Thêm tài khoản
-create PROCEDURE ThemUser(@User varchar(50),@Pass varchar(50),@NgaySinh date,@SDT varchar(15),@Email varchar(50))
-as
-begin
-	declare @usertaikhoan varchar(50)
-	select @usertaikhoan=TaiKhoan.Users
-	from TaiKhoan
-	if  @usertaikhoan<>@User
-		begin
-			insert into TaiKhoan values (@User,@Pass,@NgaySinh,@SDT,@Email)
-		end
-end;
---Cập nhật tài khoản
-create PROCEDURE UpdateUser(@User varchar(50),@Pass varchar(50),@NgaySinh date,@SDT varchar(15),@Email varchar(50))
-as
-begin
-	declare @usertaikhoan varchar(50)
-	select @usertaikhoan=TaiKhoan.Users
-	from TaiKhoan
-	if @usertaikhoan=@User
-		begin
-			update TaiKhoan set Users=@User,Passwd=@Pass,NgaySinh=@NgaySinh,SDT=@SDT,Email=@Email
-		end
-end;
---Thêm từ vựng
-create PROCEDURE ThemDictionary(@Word varchar(20),@Pronun char(20),@Mean nvarchar(50),@Link varchar(50))
-as
-begin
-	insert into Dictionary(Word,Pronun,Mean,Link) values (@Word,@Pronun,@Mean,@Link)
-end;
---Cập nhật từ vựng
-create PROCEDURE UpdateDictionary(@Word varchar(20),@Pronun char(20),@Mean nvarchar(50),@Link varchar(50))
-as
-begin
-	declare @Worddic varchar(50)
-	select @Worddic=Dictionary.Word from Dictionary
-	if  @Worddic=@Word
-		begin
-			update Dictionary set Word=@Word,Pronun=@Pronun,Mean=@Mean,Link=@Link
-		end
-end;
 
---Thêm ngữ pháp
-create PROCEDURE ThemGrammar(@Name varchar(30), @Grammar nvarchar(500))
-as
-begin
-	declare @Namegr varchar(50)
-	select @Namegr=Grammar.Name_Gr
-	from Grammar
-	if  @Namegr<>@Name
-		begin
-			insert into Grammar(Name_Gr,Grammar) values (@Name,@Grammar)
-		end
-end;
---Cập nhật ngữ pháp
-create PROCEDURE UpdateGrammar(@Name varchar(30), @Grammar nvarchar(500))
-as
-begin
-	declare @Namegr varchar(50)
-	select @Namegr=Grammar.Name_Gr
-	from Grammar
-	if  @Namegr=@Name
-		begin
-			update Grammar set Name_Gr=@Name,Grammar=@Grammar
-		end
-end;
+
 --Xem các từ thành viên thêm vào để học phát âm
+if OBJECT_ID('XemUserPhatAm','if') is not null
+	drop function XemUserPhatAm
+go
 create function XemUserPhatAm (@User varchar(50))
 returns table
 as 
@@ -1124,7 +1199,12 @@ return
 	select Dictionary.Word,Dictionary.Pronun,Dictionary.Mean,User_PhatAm.Link_UserPhatAm,User_PhatAm.ThoiGianPhatAm
 	from User_PhatAm,Dictionary
 	where @User=User_PhatAm.Users and Dictionary.ID_W=User_PhatAm.ID_W
+
+
 --Xem các từ thành viên thêm vào để học từ vựng
+if OBJECT_ID('XemUserVocabulary','if') is not null
+	drop function XemUserVocabulary
+go
 create function XemUserVocabulary (@User varchar(50))
 returns table
 as 
@@ -1132,7 +1212,12 @@ return
 	select User_Vocabulary.Voca,User_Vocabulary.Mean_Voca,Dictionary.Pronun,Dictionary.Link,User_Vocabulary.Date_Voca
 	from User_Vocabulary,Dictionary
 	where @User=User_Vocabulary.Users and Dictionary.ID_W=User_Vocabulary.ID_W
+
+
 --Xem thang trình độ
+if OBJECT_ID('XemThangTrinhDo','if') is not null
+	drop function XemThangTrinhDo
+go
 create function XemThangTrinhDo(@User varchar(50))
 returns table
 as 
@@ -1141,6 +1226,3 @@ return
 	from ThangTrinhDo
 	where @User=ThangTrinhDo.Users 
 
-
-insert into TaiKhoan values('14110001','1',1996-1-1,'0123456799','123@gmail.com')
-insert into User_PhatAm values('1',20/11/2016,'14110001','1','https://goo.gl/lLJcD4')
